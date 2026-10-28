@@ -15,7 +15,7 @@ jobs:
 
       - name: Descomprimir el proyecto
         run: |
-          rm -rf app build .gradle
+          rm -rf app build .gradle tools
           rm -f settings.gradle build.gradle settings.gradle.kts build.gradle.kts gradle.properties
           unzip -o mapa-offline.zip
 
@@ -37,11 +37,16 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
 
   mapa:
-    name: Generar mapa de Buenos Aires
+    name: Generar mapa, rutas y buscador de Buenos Aires
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Descomprimir el proyecto
+        run: unzip -q -o mapa-offline.zip -d proyecto
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -84,5 +89,25 @@ jobs:
         with:
           tag_name: mapas
           name: Mapas sin conexión
-          body: Mapa de Buenos Aires generado a partir de datos de OpenStreetMap (© colaboradores de OpenStreetMap, licencia ODbL).
+          body: Datos de Buenos Aires generados a partir de OpenStreetMap (© colaboradores de OpenStreetMap, licencia ODbL).
           files: buenos-aires.map
+
+      - name: Preparar calles, direcciones y lugares
+        run: |
+          osmium tags-filter ba.osm.pbf w/highway=motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential,living_street,service,road -o calles.osm.pbf --overwrite
+          osmium cat calles.osm.pbf -o calles.osm --overwrite
+          osmium tags-filter ba.osm.pbf nw/addr:housenumber nw/amenity nw/shop nw/tourism nw/leisure nw/place nw/office nw/historic nw/healthcare nw/railway=station nw/public_transport=station -o lugares.osm.pbf --overwrite
+          osmium export lugares.osm.pbf --geometry-types=point,polygon -f geojsonseq -o lugares.geojsonseq --overwrite
+          ls -lh calles.osm lugares.geojsonseq
+
+      - name: Crear el archivo de rutas y buscador
+        run: |
+          python3 proyecto/tools/build_nav.py calles.osm lugares.geojsonseq buenos-aires.nav
+          ls -lh buenos-aires.nav
+          test "$(stat -c%s buenos-aires.nav)" -gt 5000000
+
+      - name: Publicar rutas y buscador
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mapas
+          files: buenos-aires.nav
